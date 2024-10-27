@@ -3,4 +3,4 @@ Welcome to my experiment repository! This is where I upload the code for my vari
 
 **Feel free to explore and clone** the projects. Your feedback and suggestions are always welcome!
 
-Happy coding!
+**Happy coding!**
