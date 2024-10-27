@@ -1,0 +1,303 @@
+<!--
+Ollama to handle CORS Settings
+launchctl setenv OLLAMA_ORIGINS "*"
+Avviare Ollama
+-->
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ollama API Prompt</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            background-color: #f0f4f8;
+        }
+        input, button, select {
+            padding: 10px;
+            margin: 10px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+            font-size: 16px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #response {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #ffffff;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        #error {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #ffdddd;
+            color: #d8000c;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(255, 0, 0, 0.1);
+        }
+        h1 {
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+        <h1>Fai richieste ad un LLM installato in locale via Ollama</h1>
+        <!-- Menu a tendina per selezionare il modello -->
+        <label for="model">Seleziona il modello:</label>
+        <select id="model">
+            <option value="">Caricamento modelli...</option>
+        </select>
+        <!--
+        <select id="model">
+            <option value="llama3">Llama 3 (8B)</option>
+            <option value="mistral">Mistral (7B)</option>
+            <option value="phi3:mini">Phi-3 mini (3.8B)</option>
+        </select>
+        -->
+        <br>
+        <label for="prompt">Inserisci il tuo prompt:</label>
+        <input type="text" id="prompt" placeholder="Scrivi il tuo prompt qui..." size="50" onkeydown="checkEnter(event)">
+        <button onclick="callOllama()">Invia Prompt</button>
+
+        <br>
+        <label for="pdfFile">Carica un file PDF:</label>
+        <input type="file" id="pdfFile" accept="application/pdf">
+        <button onclick="processPDF()">Carica e invia PDF</button>
+
+        <div id="error"></div>
+        <div id="response"></div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+    <script>
+        const OLLAMA_ENDPOINT = "http://127.0.0.1:11434/api"
+        // Funzione per gestire l'evento 'Enter'
+        function checkEnter(event) {
+            if (event.key === "Enter") {
+                callOllama(); // Chiama la funzione quando viene premuto Invio
+            }
+        }
+
+        function handleError(errorMessage) {
+            const errorElement = document.getElementById("error");
+            console.error(errorMessage);
+            errorElement.innerText = errorMessage;
+        }
+
+        async function processPDF() {
+            const fileInput = document.getElementById("pdfFile");
+            const responseElement = document.getElementById("response");
+            const errorElement = document.getElementById("error");
+            responseElement.innerText = "Attendere, sto elaborando...\n\nrisposta:\n";
+            errorElement.innerText = "";
+
+            if (fileInput.files.length === 0) {
+                handleError("Per favore, seleziona un file PDF.");
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+
+            reader.onload = async function(event) {
+                const prompt = document.getElementById("prompt").value;
+                const arrayBuffer = event.target.result;
+                const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+
+                let extractedText = "";
+                if (prompt) {
+                    extractedText = prompt+"\n\n";
+                }
+                
+                // Estrai il testo da ogni pagina del PDF
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    const page = await pdf.getPage(i);
+                    const textContent = await page.getTextContent();
+                    const pageText = textContent.items.map(item => item.str).join(" ");
+                    extractedText += pageText + "\n";
+                }
+
+                console.log("Testo estratto dal PDF:", extractedText);
+
+                const selectedModel = document.getElementById("model").value;
+                try {
+                    console.log("chaimamta LLM");
+                    const response = await fetch(OLLAMA_ENDPOINT+"/generate", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({
+                            model: selectedModel,
+                            prompt: extractedText
+                        })
+                    });
+
+                    if (!response.ok) {
+                        handleError("Errore durante la richiesta: " + response.statusText);
+                        return;
+                    }
+
+                    // Crea un lettore per lo streaming della risposta
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder(); // Decodifica il testo in UTF-8
+                    let result = "";
+
+                    while (true) {
+                        // Leggi i dati dal flusso (stream)
+                        const { done, value } = await reader.read();
+
+                        if (done) {
+                            break; // Esci quando il flusso è finito
+                        }
+
+                        // Decodifica il chunk di dati e parsalo come JSON
+                        const chunk = decoder.decode(value, { stream: true });
+
+                        try {
+                            const jsonChunk = JSON.parse(chunk);
+
+                            // Estrai il valore della chiave "response"
+                            const responseText = jsonChunk.response;
+
+                            // Mostra il testo man mano che arriva
+                            responseElement.innerText += responseText; // Concatena solo il valore di "response"
+                        } catch (error) {
+                            handleError('Errore nel parsing del chunk JSON: ' + error);
+                        }
+                    }
+                    responseElement.innerHTML = marked.parse(responseElement.innerText, { breaks: true });
+                } catch (error) {
+                    handleError("Errore durante la richiesta: " + error.message);
+                }
+            };
+
+            // Leggi il file PDF come ArrayBuffer
+            reader.readAsArrayBuffer(file);
+        }
+
+        async function callOllama() {
+            const prompt = document.getElementById("prompt").value;
+            const selectedModel = document.getElementById("model").value;
+
+            if (!prompt) {
+                document.getElementById("response").innerText = "Per favore, inserisci un prompt.";
+                return;
+            }
+
+            const errorElement = document.getElementById("error");
+            const responseElement = document.getElementById("response");
+            errorElement.innerText = "";
+            responseElement.innerText = "Attendere, sto elaborando...\n\n" + "richiesta: " + prompt + "\n\nrisposta:\n";
+            // Resetta il campo di input
+            document.getElementById("prompt").value = "";
+
+            try {
+                const response = await fetch(OLLAMA_ENDPOINT+"/generate", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        model: selectedModel,
+                        prompt: prompt
+                    })
+                });
+
+                if (!response.ok) {
+                    handleError("Errore durante la richiesta: " + response.statusText);
+                    return;
+                }
+
+                // Crea un lettore per lo streaming della risposta
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder(); // Decodifica il testo in UTF-8
+                let result = "";
+
+                while (true) {
+                    // Leggi i dati dal flusso (stream)
+                    const { done, value } = await reader.read();
+
+                    if (done) {
+                        break; // Esci quando il flusso è finito
+                    }
+
+                    // Decodifica il chunk di dati e parsalo come JSON
+                    const chunk = decoder.decode(value, { stream: true });
+
+                    try {
+                        const jsonChunk = JSON.parse(chunk);
+
+                        // Estrai il valore della chiave "response"
+                        const responseText = jsonChunk.response;
+
+                        // Mostra il testo man mano che arriva
+                        responseElement.innerText += responseText; // Concatena solo il valore di "response"
+                    } catch (error) {
+                        handleError('Errore nel parsing del chunk JSON: ' + error);
+                    }
+                }
+                responseElement.innerHTML = marked.parse(responseElement.innerText, { breaks: true });
+            } catch (error) {
+                handleError("Errore durante la richiesta: " + error.message);
+            }
+        }
+        
+        // Funzione per ottenere i modelli disponibili tramite l'API /api/tags e popolare il menu a tendina
+        async function fetchModels() {
+            const errorElement = document.getElementById("error");
+            errorElement.innerText = "";
+            try {
+                const response = await fetch(OLLAMA_ENDPOINT+"/tags");
+                if (!response.ok) {
+                    handleError("Errore nel recuperare i modelli: " + response.statusText);
+                    return;
+                }
+
+                const data = await response.json();
+                console.log("Risposta API /api/tags:", data);  // Aggiunge un log per vedere la struttura della risposta
+
+                const modelSelect = document.getElementById("model");
+                modelSelect.innerHTML = ""; // Svuota il contenuto del menu a tendina
+
+                // Ordina i modelli in ordine alfabetico in base al campo 'name'
+                data.models.sort((a, b) => a.name.localeCompare(b.name));
+
+                // Itera sull'array di modelli e popola il menu a tendina
+                data.models.forEach(modelObj => {
+                    const option = document.createElement("option");
+                    option.value = modelObj.model; // Usa il valore del campo "model"
+                    option.text = modelObj.name + " (" + modelObj.details.parameter_size + ")";   // Mostra il valore del campo "name" nell'opzione
+                    modelSelect.appendChild(option);
+                });
+            } catch (error) {
+                handleError("Il server Ollama non è raggiungibile. Controlla la connessione o se il server è attivo e che siano impostati i CORS Settings:\nlaunchctl setenv OLLAMA_ORIGINS \"*\"\nriavvia Ollama\n\n" + OLLAMA_ENDPOINT);
+            }
+        }
+
+        // Chiama la funzione per ottenere i modelli quando la pagina viene caricata
+        window.onload = fetchModels;
+    </script>
+</body>
+</html>
