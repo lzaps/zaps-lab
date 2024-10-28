@@ -1,0 +1,9 @@
+langchain
+langchain_openai
+pandas
+langchain_experimental
+matplotlib
+langgraph
+langchain_core
+jupyterlab
+ipywidgets
