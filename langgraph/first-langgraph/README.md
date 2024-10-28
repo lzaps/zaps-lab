@@ -22,3 +22,8 @@ pip install -r requirements.txt
 ```
 jupyter lab
 ```
+
+(exit from env)
+```
+deactivate
+```
