@@ -3,6 +3,9 @@ langchain_core
 langchain_openai
 langchain_community
 langchain-ollama
+langchain-pinecone
 langgraph
+datasets
+semantic-router
 jupyterlab
 ipywidgets
