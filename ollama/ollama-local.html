@@ -61,22 +61,31 @@ Avviare Ollama
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
         <h1>Fai richieste ad un LLM installato in locale via Ollama</h1>
-        <!-- Menu a tendina per selezionare il modello -->
-        <label for="model">Seleziona il modello:</label>
-        <select id="model">
-            <option value="">Caricamento modelli...</option>
-        </select>
-        <!--
-        <select id="model">
-            <option value="llama3">Llama 3 (8B)</option>
-            <option value="mistral">Mistral (7B)</option>
-            <option value="phi3:mini">Phi-3 mini (3.8B)</option>
-        </select>
-        -->
+        <!-- Campo di input per la temperatura -->
+        <div style="margin-top: 20px;">
+            <!-- Menu a tendina per selezionare il modello -->
+            <label for="model" style="display: inline-block;">Modello:</label>
+            <select id="model" style="width: 200px; padding: 10px; margin-left: 10px; display: inline-block;">
+                <option value="">Caricamento modelli...</option>
+            </select>
+
+            <label for="temperature" style="margin-left: 30px; display: inline-block;">Temperatura:</label>
+            <input type="number" id="temperature" value="1" min="0" max="1" step="0.1" style="width: 120px; padding: 10px; margin-left: 10px; display: inline-block;">
+        </div>
         <br>
-        <label for="prompt">Inserisci il tuo prompt:</label>
-        <input type="text" id="prompt" placeholder="Scrivi il tuo prompt qui..." size="50" onkeydown="checkEnter(event)">
-        <button onclick="callOllama()">Invia Prompt</button>
+        <!-- Campo di input per il prompt -->
+        <div>
+            <label for="prompt" style="display: block; margin-top: 20px;">Inserisci il tuo prompt:</label>
+            <input type="text" id="prompt" placeholder="Scrivi il tuo prompt qui..." style="width: 100%; padding: 10px; margin-top: 5px; box-sizing: border-box;" onkeydown="checkEnter(event)">
+        </div>
+
+        <!-- Campo di input per la temperatura -->
+        <div>
+            <label for="temperature" style="display: block; margin-top: 20px;">Imposta la temperatura:</label>
+            <input type="number" id="temperature" value="1" min="0" max="1" step="0.1" style="width: 100%; padding: 10px; margin-top: 5px; box-sizing: border-box;">
+        </div>
+
+        <button onclick="callOllama()" style="padding: 10px 20px; margin-top: 20px;">Invia Prompt</button>
 
         <br>
         <label for="pdfFile">Carica un file PDF:</label>
@@ -221,7 +230,8 @@ Avviare Ollama
                     },
                     body: JSON.stringify({
                         model: selectedModel,
-                        prompt: prompt
+                        prompt: prompt,
+                        temperature: temperature // Invia il valore della temperatura
                     })
                 });
 
