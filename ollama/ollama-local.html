@@ -70,19 +70,13 @@ Avviare Ollama
             </select>
 
             <label for="temperature" style="margin-left: 30px; display: inline-block;">Temperatura:</label>
-            <input type="number" id="temperature" value="1" min="0" max="1" step="0.1" style="width: 120px; padding: 10px; margin-left: 10px; display: inline-block;">
+            <input type="number" id="temperature" value="0.7" min="0" max="1" step="0.1" style="width: 120px; padding: 10px; margin-left: 10px; display: inline-block;">
         </div>
         <br>
         <!-- Campo di input per il prompt -->
         <div>
             <label for="prompt" style="display: block; margin-top: 20px;">Inserisci il tuo prompt:</label>
             <input type="text" id="prompt" placeholder="Scrivi il tuo prompt qui..." style="width: 100%; padding: 10px; margin-top: 5px; box-sizing: border-box;" onkeydown="checkEnter(event)">
-        </div>
-
-        <!-- Campo di input per la temperatura -->
-        <div>
-            <label for="temperature" style="display: block; margin-top: 20px;">Imposta la temperatura:</label>
-            <input type="number" id="temperature" value="1" min="0" max="1" step="0.1" style="width: 100%; padding: 10px; margin-top: 5px; box-sizing: border-box;">
         </div>
 
         <button onclick="callOllama()" style="padding: 10px 20px; margin-top: 20px;">Invia Prompt</button>
@@ -209,6 +203,7 @@ Avviare Ollama
         async function callOllama() {
             const prompt = document.getElementById("prompt").value;
             const selectedModel = document.getElementById("model").value;
+            const temperature = document.getElementById("temperature").value;
 
             if (!prompt) {
                 document.getElementById("response").innerText = "Per favore, inserisci un prompt.";
