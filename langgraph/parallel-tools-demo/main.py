@@ -8,7 +8,7 @@ from datetime import datetime
 from langgraph.graph import StateGraph, START, END
 
 from state import GraphState
-from tools import AVAILABLE_TOOLS
+from tools import AVAILABLE_TOOLS, InterruptibleToolWrapper, register_stop_event, cleanup_stop_event
 
 # Initialize colorama
 init(autoreset=True)
@@ -102,8 +102,16 @@ def aggregate_results(state: GraphState) -> Dict[str, Any]:
     }
 
 
-def build_graph() -> StateGraph:
-    """Build the LangGraph with parallel tool execution."""
+def build_graph(execution_id: str) -> StateGraph:
+    """
+    Build the LangGraph with parallel tool execution.
+    
+    Args:
+        execution_id: Unique execution ID for stop functionality
+    
+    Returns:
+        Compiled graph ready for execution
+    """
     
     # Create the graph
     builder = StateGraph(GraphState)
@@ -112,9 +120,16 @@ def build_graph() -> StateGraph:
     builder.add_node("prepare_execution", prepare_execution)
     builder.add_edge(START, "prepare_execution")
     
-    # Add all tool nodes
+    # Add all tool nodes wrapped for interruption support
     for tool_name, tool_class in AVAILABLE_TOOLS.items():
-        builder.add_node(tool_name, tool_class())
+        tool_instance = tool_class()
+        # Wrap with InterruptibleToolWrapper for stop support
+        wrapped_tool = InterruptibleToolWrapper(
+            tool_instance,
+            tool_name,
+            check_interval=0.5
+        )
+        builder.add_node(tool_name, wrapped_tool)
     
     # Add conditional edges for parallel execution
     # All tools will be executed in parallel after prepare_execution
@@ -139,9 +154,16 @@ def build_graph() -> StateGraph:
 
 def main():
     """Main execution function."""
+    import uuid
     
-    # Build the graph
-    graph = build_graph()
+    # Generate execution ID (for consistency with API and stop support)
+    execution_id = str(uuid.uuid4())
+    
+    # Register stop event (optional for console mode, but good for consistency)
+    register_stop_event(execution_id)
+    
+    # Build the graph with execution ID
+    graph = build_graph(execution_id)
     
     # Save graph visualization
     try:
@@ -153,17 +175,24 @@ def main():
         print(f"{Fore.YELLOW}⚠ Could not save graph visualization: {e}{Style.RESET_ALL}")
         print(f"{Fore.YELLOW}  Try: pip install grandalf{Style.RESET_ALL}\n")
     
+    # Generate execution ID (for consistency with API)
+    execution_id = str(uuid.uuid4())
+    
     # Execute the graph
     initial_state = {
         "input_query": "Execute all tools to gather comprehensive information",
         "tool_results": [],
         "execution_summary": None,
-        "start_time": None
+        "start_time": None,
+        "execution_id": execution_id
     }
     
-    result = graph.invoke(initial_state)
-    
-    return result
+    try:
+        result = graph.invoke(initial_state)
+        return result
+    finally:
+        # Cleanup stop event
+        cleanup_stop_event(execution_id)
 
 
 if __name__ == "__main__":

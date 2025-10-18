@@ -8,6 +8,8 @@ This project demonstrates parallel tool execution in LangGraph with simulated to
 - ⏱️ **Varying Execution Times**: Tools simulate different complexity levels (fast, medium, slow)
 - 🎨 **Real-time Progress Tracking**: Colored console output showing when each tool starts and completes
 - 📊 **Execution Summary**: Detailed statistics comparing parallel vs sequential execution
+- 🛑 **Stop Functionality**: Interrupt running executions and get partial results (NEW!)
+- 🌊 **Real-time Streaming**: HTTP streaming with Server-Sent Events (SSE) support
 - 🏗️ **Clean Architecture**: Separation of concerns with dedicated modules for state, tools, and graph logic
 
 ## Tools Overview
@@ -29,11 +31,20 @@ The demo includes 5 simulated tools with realistic long execution times:
 
 ```
 parallel-tools-demo/
-├── main.py              # Main execution script with graph setup
-├── tools.py             # Tool definitions with simulated delays
-├── state.py             # LangGraph state schema definition
-├── requirements.txt     # Python dependencies
-└── README.md           # This file
+├── main.py                         # Main execution script with graph setup
+├── api.py                          # FastAPI streaming server with stop support
+├── tools.py                        # Tool definitions + InterruptibleToolWrapper
+├── state.py                        # LangGraph state schema definition
+├── test_stop_functionality.py      # Automated tests for stop feature
+├── test_stop_simple.sh             # Simple bash test script
+├── requirements.txt                # Python dependencies
+├── README.md                       # This file
+├── QUICKSTART.md                   # Quick start guide
+├── WRAPPER_APPROACH.md             # ⭐ Universal wrapper architecture
+├── STOP_FUNCTIONALITY_GUIDE.md     # Stop feature detailed guide
+├── IMPLEMENTATION_SUMMARY.md       # Implementation details
+├── INTEGRATION_EXAMPLES.md         # Integration examples
+└── CHANGELOG_WRAPPER.md            # Changelog for wrapper approach
 ```
 
 ## Setup Instructions
@@ -85,6 +96,32 @@ Then test with:
 - **curl**: `curl -N http://localhost:8000/execute?query=test`
 
 See [API_GUIDE.md](API_GUIDE.md) for complete API documentation.
+
+### Test the Stop Functionality (NEW!)
+
+The API now supports stopping executions in progress:
+
+```bash
+# Terminal 1: Start an execution
+python api.py
+
+# Terminal 2: Run automated stop test
+python test_stop_functionality.py --test tools --tools 2
+
+# Or test with timeout
+python test_stop_functionality.py --test timeout --timeout 5
+```
+
+**Manual Testing:**
+```bash
+# Start execution and capture execution_id
+curl -N http://localhost:8000/execute?query=test | tee output.json
+
+# In another terminal, stop it
+curl -X POST http://localhost:8000/stop/{execution_id}
+```
+
+See [STOP_FUNCTIONALITY_GUIDE.md](STOP_FUNCTIONALITY_GUIDE.md) for detailed documentation.
 
 ### Expected Output
 
@@ -153,11 +190,11 @@ Tool Name                 Duration     Status     Result
 The project uses LangGraph's StateGraph with a fan-out/fan-in pattern:
 
 ```
-START → prepare_execution → [all 8 tools in parallel] → aggregate_results → END
+START → prepare_execution → [all 5 tools in parallel] → aggregate_results → END
 ```
 
 1. **prepare_execution**: Initializes state and logs start
-2. **Parallel Tools**: All 8 tools execute simultaneously
+2. **Parallel Tools**: All 5 tools execute simultaneously
 3. **aggregate_results**: Collects results and displays summary
 
 ### State Management
@@ -167,14 +204,49 @@ The `GraphState` TypedDict manages:
 - `tool_results`: Accumulated results using `operator.add` reducer
 - `execution_summary`: Timing statistics
 - `start_time`: Execution start timestamp
+- `execution_id`: Unique ID for tracking and stop functionality
+
+### Stop Functionality
+
+The stop feature allows interrupting executions in progress:
+
+1. **Universal Wrapper**: Tools are wrapped with `InterruptibleToolWrapper`
+2. **Thread Monitoring**: Wrapper monitors tool execution and checks for stop every 0.5s
+3. **Clean Tools**: Original tools remain simple (no stop logic inside)
+4. **Partial Results**: Interrupted tools return with "interrupted" status
+5. **Graceful Aggregation**: Results are aggregated even with partial data
+
+**How it works:**
+- Each execution gets a unique UUID
+- Tools run in separate threads monitored by wrapper
+- Stop signal is sent via `POST /stop/{execution_id}`
+- Wrapper detects stop within 0.5s and returns "interrupted"
+- Original tool code is clean and reusable
+- Works with sleep, API calls, database queries, any blocking operation
+
+**Architecture:**
+```
+Original Tool (simple) → InterruptibleToolWrapper → Graph Node
+  time.sleep()           monitors + checks stop      returns result
+  or API call            every 0.5s                  or "interrupted"
+```
+
+See [WRAPPER_APPROACH.md](WRAPPER_APPROACH.md) for architecture details.  
+See [STOP_FUNCTIONALITY_GUIDE.md](STOP_FUNCTIONALITY_GUIDE.md) for usage guide.
 
 ### Tool Implementation
 
 Each tool:
 1. Logs start with colored timestamp
-2. Simulates work with `time.sleep()`
+2. Performs its work (sleep, API call, database query, etc.)
 3. Logs completion with duration
 4. Returns structured result to state
+
+**Interruption is handled by wrapper:**
+- `InterruptibleToolWrapper` monitors tool execution in separate thread
+- Checks for stop signal every 0.5s
+- Returns "interrupted" status if stop is detected
+- Original tool code stays clean and simple
 
 ## Customization
 
@@ -231,8 +303,10 @@ deactivate
 
 1. **Parallel Execution in LangGraph**: Using conditional edges to fan-out to multiple nodes
 2. **State Reduction**: Using `operator.add` to accumulate results from parallel nodes
-3. **Real-time Feedback**: Progress tracking during long-running operations
+3. **Real-time Feedback**: Progress tracking during long-running operations with HTTP streaming
 4. **Performance Benefits**: Visual demonstration of parallel vs sequential execution
+5. **Interruptible Execution**: Graceful handling of stop signals during tool execution
+6. **Partial Results**: Aggregating and returning results even when execution is interrupted
 
 ## Extending the Demo
 

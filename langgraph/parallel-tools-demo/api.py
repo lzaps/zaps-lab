@@ -3,21 +3,32 @@
 import asyncio
 import time
 import json
+import uuid
 from datetime import datetime
-from typing import AsyncIterator, Dict, Any
+from typing import AsyncIterator, Dict, Any, Set
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from state import GraphState
-from tools import AVAILABLE_TOOLS
+from tools import (
+    AVAILABLE_TOOLS, 
+    register_stop_event, 
+    trigger_stop, 
+    cleanup_stop_event,
+    InterruptibleToolWrapper
+)
 
 
 # Global event queue for streaming
 event_queue = asyncio.Queue()
+
+# Track active executions
+active_executions: Set[str] = set()
+active_executions_lock = asyncio.Lock()
 
 
 def log_event(event_type: str, tool_name: str = None, **data):
@@ -36,27 +47,57 @@ def log_event(event_type: str, tool_name: str = None, **data):
         pass
 
 
-class ToolWrapper:
-    """Wrapper for tools that logs events."""
+class ToolWrapperWithLogging:
+    """
+    Wrapper that combines InterruptibleToolWrapper with event logging.
+    
+    This wrapper:
+    1. Makes tools interruptible using InterruptibleToolWrapper
+    2. Logs events to the streaming queue for real-time updates
+    """
     
     def __init__(self, tool_class, tool_name):
-        self.tool = tool_class()
+        """
+        Initialize wrapper.
+        
+        Args:
+            tool_class: The tool class to instantiate and wrap
+            tool_name: Name of the tool for logging
+        """
+        # Create tool instance
+        tool_instance = tool_class()
+        
+        # Wrap it with InterruptibleToolWrapper
+        self.interruptible_tool = InterruptibleToolWrapper(
+            tool_instance, 
+            tool_name,
+            check_interval=0.5
+        )
+        
         self.tool_name = tool_name
+        self.tool_instance = tool_instance
     
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute tool with logging and interruption support."""
         # Log start
         log_event("tool_start", self.tool_name, 
-                 delay=self.tool.delay)
+                 delay=self.tool_instance.delay)
         
-        # Execute tool
+        # Execute tool (interruptible)
         start_time = time.time()
-        result = self.tool(state)
+        result = self.interruptible_tool(state)
         duration = time.time() - start_time
         
-        # Log completion
-        log_event("tool_complete", self.tool_name,
-                 duration=duration,
-                 result=result["tool_results"][0]["result"])
+        # Log completion or interruption
+        status = result["tool_results"][0]["status"]
+        if status == "interrupted":
+            log_event("tool_interrupted", self.tool_name,
+                     duration=duration,
+                     result=result["tool_results"][0]["result"])
+        else:
+            log_event("tool_complete", self.tool_name,
+                     duration=duration,
+                     result=result["tool_results"][0]["result"])
         
         return result
 
@@ -64,10 +105,25 @@ class ToolWrapper:
 async def execute_graph_streaming(query: str, format: str = "json", keepalive: bool = True) -> AsyncIterator[str]:
     """Execute the graph and yield events as they happen."""
     
-    # Log start
-    log_event("execution_start", None, query=query, num_tools=len(AVAILABLE_TOOLS))
+    # Generate unique execution ID
+    execution_id = str(uuid.uuid4())
     
-    start_event = {'event': 'execution_start', 'query': query, 'num_tools': len(AVAILABLE_TOOLS)}
+    # Register stop event for this execution
+    register_stop_event(execution_id)
+    
+    # Track active execution
+    async with active_executions_lock:
+        active_executions.add(execution_id)
+    
+    # Log start
+    log_event("execution_start", None, query=query, num_tools=len(AVAILABLE_TOOLS), execution_id=execution_id)
+    
+    start_event = {
+        'event': 'execution_start', 
+        'query': query, 
+        'num_tools': len(AVAILABLE_TOOLS),
+        'execution_id': execution_id
+    }
     if format == "sse":
         yield f"data: {json.dumps(start_event)}\n\n"
     else:
@@ -92,8 +148,10 @@ async def execute_graph_streaming(query: str, format: str = "json", keepalive: b
     builder.add_edge(START, "prepare_execution")
     
     # Add wrapped tool nodes
+    # Tools are wrapped with InterruptibleToolWrapper for stop support
+    # and ToolWrapperWithLogging for event streaming
     for tool_name, tool_class in AVAILABLE_TOOLS.items():
-        wrapped_tool = ToolWrapper(tool_class, tool_name)
+        wrapped_tool = ToolWrapperWithLogging(tool_class, tool_name)
         builder.add_node(tool_name, wrapped_tool)
     
     # Conditional edges for parallel execution
@@ -143,7 +201,8 @@ async def execute_graph_streaming(query: str, format: str = "json", keepalive: b
         "input_query": query,
         "tool_results": [],
         "execution_summary": None,
-        "start_time": None
+        "start_time": None,
+        "execution_id": execution_id
     }
     
     # Run graph in thread to not block
@@ -200,13 +259,21 @@ async def execute_graph_streaming(query: str, format: str = "json", keepalive: b
                 execution_complete = True
     
     # Send completion event
-    completion_event = {'event': 'execution_complete', 'timestamp': datetime.now().strftime("%H:%M:%S.%f")[:-3]}
+    completion_event = {
+        'event': 'execution_complete', 
+        'execution_id': execution_id,
+        'timestamp': datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    }
     if format == "sse":
         yield f"data: {json.dumps(completion_event)}\n\n"
     else:
         yield json.dumps(completion_event) + "\n"
     
+    # Cleanup
     executor.shutdown(wait=False)
+    cleanup_stop_event(execution_id)
+    async with active_executions_lock:
+        active_executions.discard(execution_id)
 
 
 @asynccontextmanager
@@ -247,15 +314,23 @@ async def root():
     """Root endpoint with API information."""
     return {
         "name": "Parallel Tools Execution API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "endpoints": {
             "GET /execute": "Execute tools with streaming (query param)",
             "POST /execute": "Execute tools with streaming (JSON body)",
+            "POST /stop/{execution_id}": "Stop a running execution",
+            "GET /executions": "List active executions",
+            "GET /tools": "List available tools",
             "GET /health": "Health check"
         },
         "example": "GET /execute?query=test or curl -N http://localhost:8000/execute?query=test",
         "tools": list(AVAILABLE_TOOLS.keys()),
-        "streaming": "Server-Sent Events (SSE)"
+        "streaming": "Server-Sent Events (SSE)",
+        "features": {
+            "parallel_execution": "All tools run in parallel",
+            "real_time_streaming": "Events streamed as they happen",
+            "stop_functionality": "Can interrupt running tools via /stop endpoint"
+        }
     }
 
 
@@ -344,6 +419,58 @@ async def list_tools():
             "description": tool_class.__doc__ or "No description"
         }
     return {"tools": tools_info, "total": len(tools_info)}
+
+
+@app.get("/executions")
+async def list_executions():
+    """List currently active executions."""
+    async with active_executions_lock:
+        executions = list(active_executions)
+    return {
+        "active_executions": executions,
+        "count": len(executions),
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@app.post("/stop/{execution_id}")
+async def stop_execution(execution_id: str):
+    """
+    Stop a running execution by its ID.
+    
+    This will interrupt all tools still running and force completion
+    with partial results.
+    
+    Path parameters:
+    - execution_id: The UUID of the execution to stop
+    
+    Returns:
+    - success: Whether the stop was triggered
+    - message: Description of the result
+    """
+    async with active_executions_lock:
+        is_active = execution_id in active_executions
+    
+    if not is_active:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Execution {execution_id} not found or already completed"
+        )
+    
+    success = trigger_stop(execution_id)
+    
+    if success:
+        return {
+            "success": True,
+            "execution_id": execution_id,
+            "message": "Stop signal sent. Tools will be interrupted.",
+            "timestamp": datetime.now().isoformat()
+        }
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to trigger stop event"
+        )
 
 
 if __name__ == "__main__":

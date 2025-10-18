@@ -19,4 +19,7 @@ class GraphState(TypedDict):
     
     # Timestamp when execution started
     start_time: Optional[float]
+    
+    # Unique execution ID for stop functionality
+    execution_id: str
 
